@@ -51,6 +51,7 @@ func handler(writer http.ResponseWriter, req *http.Request) {
 
 		reader := bufio.NewReader(file)
 		writer.Header().Set("Content-Type", "image/jpeg")
+		writer.WriteHeader(http.StatusOK)
 
 		_, err = io.Copy(writer, reader)
 
@@ -59,7 +60,7 @@ func handler(writer http.ResponseWriter, req *http.Request) {
 			fmt.Fprintln(writer, err)
 			return
 		}
-		writer.WriteHeader(http.StatusOK)
+
 	} else {
 		doc, err := goquery.NewDocument(url)
 		if err != nil {
@@ -144,8 +145,8 @@ func handler(writer http.ResponseWriter, req *http.Request) {
 		}
 
 		writer.Header().Set("Content-Type", "image/jpeg")
-		writer.Write(imageBytes)
 		writer.WriteHeader(http.StatusOK)
+		writer.Write(imageBytes)
 
 	}
 }
