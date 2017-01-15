@@ -1,0 +1,10 @@
+package: fcgi-blog-image
+license: MIT
+owners:
+- name: nasust
+  email: nasust@gmail.com
+  homepage: http://nasust.hatenablog.com
+                  
+import:
+- package: github.com/PuerkitoBio/goquery
+- package: gopkg.in/gographics/imagick.v1/imagick
