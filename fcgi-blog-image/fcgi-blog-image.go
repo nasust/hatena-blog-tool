@@ -47,6 +47,7 @@ func handler(writer http.ResponseWriter, req *http.Request) {
 			fmt.Fprintln(writer, err)
 			return
 		}
+		defer file.Close()
 
 		reader := bufio.NewReader(file)
 		writer.Header().Set("Content-Type", "image/jpeg")
