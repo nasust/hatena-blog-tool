@@ -2,17 +2,20 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/fcgi"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/antonholmquist/jason"
 	"gopkg.in/gographics/imagick.v1/imagick"
 )
 
@@ -151,11 +154,96 @@ func handler(writer http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func handlerStar(writer http.ResponseWriter, req *http.Request) {
+	urls := req.FormValue("urls")
+	callback := req.FormValue("callback")
+
+	if urls == "" || callback == "" {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Println(writer, "param error")
+		return
+	}
+
+	urlList := strings.Split(urls, ",")
+
+	var uri string = ""
+
+	for i, queryUrl := range urlList {
+		if strings.HasPrefix(queryUrl, "http://nasust.hatenablog.com") == false {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Println(writer, "http://nasust.hatenablog.com only")
+			return
+		}
+
+		uri += "uri=" + url.QueryEscape(queryUrl)
+		if i < len(urlList)-1 {
+			uri += "&"
+		}
+	}
+
+	response, err := http.Get("http://s.hatena.com/entry.json?" + uri)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Println(writer, err)
+		return
+	}
+
+	starsJson, err := jason.NewObjectFromReader(response.Body)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Println(writer, err)
+		return
+	}
+
+	starCountMap := map[string]interface{}{}
+
+	entries, _ := starsJson.GetObjectArray("entries")
+	for _, entry := range entries {
+
+		var starCount int
+		stars, _ := entry.GetObjectArray("stars")
+		for _, star := range stars {
+			count, err := star.GetInt64("count")
+			if err == nil {
+				starCount += int(count)
+			} else {
+				starCount += 1
+			}
+		}
+
+		coloredStars, _ := entry.GetObjectArray("colored_stars")
+		for _, coloredStar := range coloredStars {
+			stars, _ := coloredStar.GetObjectArray("stars")
+			for _, star := range stars {
+				count, err := star.GetInt64("count")
+				if err == nil {
+					starCount += int(count)
+				} else {
+					starCount += 1
+				}
+			}
+
+		}
+
+		entryUri, _ := entry.GetString("uri")
+		starCountMap[entryUri] = starCount
+	}
+
+	jsonBytes, _ := json.MarshalIndent(starCountMap, "", "    ")
+	jsonp := callback + "(" + string(jsonBytes) + ");"
+
+	writer.Header().Set("Content-Type", "application/javascript")
+	writer.WriteHeader(http.StatusOK)
+	fmt.Fprint(writer, jsonp)
+
+}
+
 func main() {
 	l, err := net.Listen("unix", "/var/run/go-fcgi.sock")
 	if err != nil {
 		fmt.Println("listen error: ", err)
 	}
 	http.HandleFunc("/fcgi/blog-image", handler)
+	http.HandleFunc("/fcgi/star", handlerStar)
 	fcgi.Serve(l, nil)
 }
