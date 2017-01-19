@@ -238,12 +238,191 @@ func handlerStar(writer http.ResponseWriter, req *http.Request) {
 
 }
 
+func handlerBlur(writer http.ResponseWriter, req *http.Request) {
+	url := req.FormValue("url")
+
+	if strings.HasPrefix(url, URL_PREFIX) == false {
+		writer.WriteHeader(http.StatusNotFound)
+		fmt.Fprintln(writer, "Not Found: ", url)
+		return
+	}
+
+	imageFileName := strings.Replace(url, URL_PREFIX, "", 1)
+	imageFileName = strings.Replace(imageFileName, "/", "-", -1)
+
+	imageFileName = imageFileName + "-blur.jpeg"
+
+	if Exists(IMAGE_DIR + imageFileName) {
+		file, err := os.Open(IMAGE_DIR + imageFileName)
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+		defer file.Close()
+
+		reader := bufio.NewReader(file)
+		writer.Header().Set("Content-Type", "image/jpeg")
+		writer.WriteHeader(http.StatusOK)
+
+		_, err = io.Copy(writer, reader)
+
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+
+	} else {
+		doc, err := goquery.NewDocument(url)
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+
+		selection := doc.Find("meta[property='og:image']")
+		if selection.Length() == 0 {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, "not found og image")
+			return
+		}
+		selection = selection.First()
+		content, exists := selection.Attr("content")
+		if exists == false {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, "not found og image content")
+			return
+		}
+
+		response, err := http.Get(content)
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+		defer response.Body.Close()
+
+		byteArray, _ := ioutil.ReadAll(response.Body)
+
+		var imageBytes []byte
+
+		imagick.Initialize()
+		defer imagick.Terminate()
+
+		nw := imagick.NewMagickWand()
+		defer nw.Destroy()
+
+		err = nw.ReadImageBlob(byteArray)
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+
+		imageWidth := nw.GetImageWidth()
+		imageHeight := nw.GetImageHeight()
+
+		nw.ResizeImage(imageWidth/2, imageHeight/2, imagick.FILTER_LANCZOS2_SHARP, 1.0)
+		nw.BlurImage(32, 4)
+
+		imageBytes = nw.GetImageBlob()
+
+		err = nw.WriteImage(IMAGE_DIR + imageFileName)
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Println(writer, err)
+			return
+		}
+
+		writer.Header().Set("Content-Type", "image/jpeg")
+		writer.WriteHeader(http.StatusOK)
+		writer.Write(imageBytes)
+	}
+
+}
+
+func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
+	url := req.FormValue("url")
+	callback := req.FormValue("callback")
+
+	if strings.HasPrefix(url, URL_PREFIX) == false || callback == "" {
+		writer.WriteHeader(http.StatusNotFound)
+		fmt.Fprintln(writer, "Not Found: ", url)
+		return
+	}
+
+	doc, err := goquery.NewDocument(url)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(writer, err)
+		return
+	}
+
+	selection := doc.Find("meta[property='og:image']")
+	if selection.Length() == 0 {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(writer, "not found og image")
+		return
+	}
+	selection = selection.First()
+	content, exists := selection.Attr("content")
+	if exists == false {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(writer, "not found og image content")
+		return
+	}
+
+	response, err := http.Get(content)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(writer, err)
+		return
+	}
+	defer response.Body.Close()
+
+	byteArray, _ := ioutil.ReadAll(response.Body)
+
+	imagick.Initialize()
+	defer imagick.Terminate()
+
+	nw := imagick.NewMagickWand()
+	defer nw.Destroy()
+
+	err = nw.ReadImageBlob(byteArray)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(writer, err)
+		return
+	}
+
+	nw.ResizeImage(1, 1, imagick.FILTER_LANCZOS2_SHARP, 1.0)
+
+	color, _ := nw.GetImagePixelColor(0, 0)
+	colorString := color.GetColorAsNormalizedString()
+	colorCount := color.GetColorCount()
+
+	jsonMap := map[string]interface{}{}
+	jsonMap["color"] = colorString
+	jsonMap["count"] = colorCount
+
+	jsonBytes, _ := json.MarshalIndent(jsonMap, "", "    ")
+	jsonp := callback + "(" + string(jsonBytes) + ");"
+
+	writer.Header().Set("Content-Type", "application/javascript")
+	writer.WriteHeader(http.StatusOK)
+	fmt.Fprint(writer, jsonp)
+}
+
 func main() {
 	l, err := net.Listen("unix", "/var/run/go-fcgi.sock")
 	if err != nil {
 		fmt.Println("listen error: ", err)
 	}
 	http.HandleFunc("/fcgi/blog-image", handler)
+	http.HandleFunc("/fcgi/blog-image-blur", handlerBlur)
+	http.HandleFunc("/fcgi/color-avarage", handlerColorAvarage)
 	http.HandleFunc("/fcgi/star", handlerStar)
+
 	fcgi.Serve(l, nil)
 }
