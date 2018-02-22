@@ -11,6 +11,7 @@ import (
 	"net/http/fcgi"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -250,7 +251,7 @@ func handlerBlur(writer http.ResponseWriter, req *http.Request) {
 	imageFileName := strings.Replace(url, URL_PREFIX, "", 1)
 	imageFileName = strings.Replace(imageFileName, "/", "-", -1)
 
-	imageFileName = imageFileName + "-blur.jpeg"
+	imageFileName = imageFileName + "-blur.png"
 
 	if Exists(IMAGE_DIR + imageFileName) {
 		file, err := os.Open(IMAGE_DIR + imageFileName)
@@ -262,7 +263,7 @@ func handlerBlur(writer http.ResponseWriter, req *http.Request) {
 		defer file.Close()
 
 		reader := bufio.NewReader(file)
-		writer.Header().Set("Content-Type", "image/jpeg")
+		writer.Header().Set("Content-Type", "image/png")
 		writer.WriteHeader(http.StatusOK)
 
 		_, err = io.Copy(writer, reader)
@@ -307,13 +308,34 @@ func handlerBlur(writer http.ResponseWriter, req *http.Request) {
 
 		var imageBytes []byte
 
-		imagick.Initialize()
-		defer imagick.Terminate()
-
 		nw := imagick.NewMagickWand()
 		defer nw.Destroy()
 
+		mask := imagick.NewMagickWand()
+		defer mask.Destroy()
+
 		err = nw.ReadImageBlob(byteArray)
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+
+		err = mask.ReadImage(IMAGE_DIR + "mask.png")
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+
+		err = nw.SetFormat("png32")
+		if err != nil {
+			writer.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(writer, err)
+			return
+		}
+
+		err = nw.SetImageMatte(true)
 		if err != nil {
 			writer.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintln(writer, err)
@@ -323,8 +345,15 @@ func handlerBlur(writer http.ResponseWriter, req *http.Request) {
 		imageWidth := nw.GetImageWidth()
 		imageHeight := nw.GetImageHeight()
 
-		nw.ResizeImage(imageWidth/2, imageHeight/2, imagick.FILTER_LANCZOS2_SHARP, 1.0)
+		newWidth := imageWidth / 3
+		newHeight := imageHeight / 3
+
+		nw.ResizeImage(newWidth, newHeight, imagick.FILTER_LANCZOS2_SHARP, 1.0)
+		mask.ResizeImage(newWidth, newHeight, imagick.FILTER_LANCZOS2_SHARP, 1.0)
+
 		nw.BlurImage(32, 4)
+
+		nw.CompositeImage(mask, imagick.COMPOSITE_OP_DST_IN, 0, 0)
 
 		imageBytes = nw.GetImageBlob()
 
@@ -335,7 +364,7 @@ func handlerBlur(writer http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		writer.Header().Set("Content-Type", "image/jpeg")
+		writer.Header().Set("Content-Type", "image/png")
 		writer.WriteHeader(http.StatusOK)
 		writer.Write(imageBytes)
 	}
@@ -383,9 +412,6 @@ func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
 
 	byteArray, _ := ioutil.ReadAll(response.Body)
 
-	imagick.Initialize()
-	defer imagick.Terminate()
-
 	nw := imagick.NewMagickWand()
 	defer nw.Destroy()
 
@@ -415,6 +441,11 @@ func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	imagick.Initialize()
+	defer imagick.Terminate()
+
 	l, err := net.Listen("unix", "/var/run/go-fcgi.sock")
 	if err != nil {
 		fmt.Println("listen error: ", err)
