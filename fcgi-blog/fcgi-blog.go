@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/http/fcgi"
 	"net/url"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/antonholmquist/jason"
@@ -188,6 +192,7 @@ func handlerStar(writer http.ResponseWriter, req *http.Request) {
 		fmt.Println(writer, err)
 		return
 	}
+	defer response.Body.Close()
 
 	starsJson, err := jason.NewObjectFromReader(response.Body)
 	if err != nil {
@@ -371,6 +376,8 @@ func handlerBlur(writer http.ResponseWriter, req *http.Request) {
 
 }
 
+var colorMap sync.Map
+
 func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
 	url := req.FormValue("url")
 	callback := req.FormValue("callback")
@@ -379,6 +386,16 @@ func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
 		writer.WriteHeader(http.StatusNotFound)
 		fmt.Fprintln(writer, "Not Found: ", url)
 		return
+	}
+
+	if value, ok := colorMap.Load(url); ok {
+		if jsonString, ok := value.(string); ok {
+			jsonp := callback + "(" + jsonString + ");"
+			writer.Header().Set("Content-Type", "application/javascript")
+			writer.WriteHeader(http.StatusOK)
+			fmt.Fprint(writer, jsonp)
+			return
+		}
 	}
 
 	doc, err := goquery.NewDocument(url)
@@ -433,7 +450,11 @@ func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
 	jsonMap["count"] = colorCount
 
 	jsonBytes, _ := json.MarshalIndent(jsonMap, "", "    ")
-	jsonp := callback + "(" + string(jsonBytes) + ");"
+	jsonString := string(jsonBytes)
+
+	colorMap.Store(url, jsonString)
+
+	jsonp := callback + "(" + jsonString + ");"
 
 	writer.Header().Set("Content-Type", "application/javascript")
 	writer.WriteHeader(http.StatusOK)
@@ -446,10 +467,20 @@ func main() {
 	imagick.Initialize()
 	defer imagick.Terminate()
 
-	l, err := net.Listen("unix", "/var/run/go-fcgi.sock")
+	l, err := net.Listen("unix", "/home/mori/var/run/go-fcgi.sock")
 	if err != nil {
 		fmt.Println("listen error: ", err)
 	}
+
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt, os.Kill, syscall.SIGTERM)
+	go func(c chan os.Signal) {
+		sig := <-c
+		log.Printf("Caught signal %s: shutting down.", sig)
+		l.Close()
+		os.Exit(0)
+	}(sigc)
+
 	http.HandleFunc("/fcgi/blog-image", handler)
 	http.HandleFunc("/fcgi/blog-image-blur", handlerBlur)
 	http.HandleFunc("/fcgi/color-avarage", handlerColorAvarage)
