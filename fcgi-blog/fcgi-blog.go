@@ -462,7 +462,7 @@ func handlerColorAvarage(writer http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU())
+	runtime.GOMAXPROCS(runtime.NumCPU() * 10)
 
 	imagick.Initialize()
 	defer imagick.Terminate()
